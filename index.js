@@ -30,9 +30,12 @@ class GameManager {
             pin = Math.floor(100000 + Math.random() * 900000).toString();
         }
 
+        const hostSecret = Math.random().toString(36).substring(7);
+
         const game = {
             pin,
             hostId: hostSocketId,
+            hostSecret, // Secret token to identify host even if socket reconnects
             players: [], // { id, name, score, streak }
             questions: [],
             currentQuestionIndex: -1,
@@ -41,13 +44,14 @@ class GameManager {
         };
 
         this.games.set(pin, game);
-        return pin;
+        return { pin, hostSecret };
     }
 
     getGame(pin) {
         return this.games.get(pin);
     }
 
+    // ... (addPlayer, removePlayer remain same) ...
     addPlayer(pin, player) {
         const game = this.games.get(pin);
         if (game) {
@@ -63,12 +67,11 @@ class GameManager {
             const playerIndex = game.players.findIndex(p => p.id === socketId);
             if (playerIndex !== -1) {
                 game.players.splice(playerIndex, 1);
-                // If game is empty and host is gone, maybe delete? 
-                // For now, just remove player.
                 return { pin, game };
             }
             if (game.hostId === socketId) {
-                this.games.delete(pin);
+                // Host disconnected, but don't delete game immediately to allow reconnect
+                // this.games.delete(pin); 
                 return { pin, game, isHost: true };
             }
         }
@@ -83,17 +86,21 @@ io.on('connection', (socket) => {
 
     // HOST EVENTS
     socket.on('create_game', (questions) => {
-        const pin = gameManager.createGame(socket.id);
+        const { pin, hostSecret } = gameManager.createGame(socket.id);
         const game = gameManager.getGame(pin);
         game.questions = questions;
         socket.join(pin);
-        socket.emit('game_created', pin);
+        socket.emit('game_created', { pin, hostSecret });
         console.log(`Game created: ${pin}`);
     });
 
-    socket.on('start_game', (pin) => {
+    socket.on('start_game', ({ pin, hostSecret }) => {
         const game = gameManager.getGame(pin);
-        if (game && game.hostId === socket.id) {
+        if (game && game.hostSecret === hostSecret) {
+            // Update hostId in case of reconnect
+            game.hostId = socket.id;
+            socket.join(pin);
+
             game.state = 'QUESTION';
             game.currentQuestionIndex = 0;
             io.to(pin).emit('game_started');
@@ -103,9 +110,11 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('next_question', (pin) => {
+    socket.on('next_question', ({ pin, hostSecret }) => {
         const game = gameManager.getGame(pin);
-        if (game && game.hostId === socket.id) {
+        if (game && game.hostSecret === hostSecret) {
+            game.hostId = socket.id; // Update hostId
+
             game.currentQuestionIndex++;
             if (game.currentQuestionIndex < game.questions.length) {
                 game.state = 'QUESTION';
@@ -118,9 +127,11 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('show_results', (pin) => {
+    socket.on('show_results', ({ pin, hostSecret }) => {
         const game = gameManager.getGame(pin);
-        if (game && game.hostId === socket.id) {
+        if (game && game.hostSecret === hostSecret) {
+            game.hostId = socket.id; // Update hostId
+
             game.state = 'RESULT';
             // Calculate scores if not done on fly
             io.to(pin).emit('question_results', {
