@@ -98,6 +98,8 @@ io.on('connection', (socket) => {
             game.currentQuestionIndex = 0;
             io.to(pin).emit('game_started');
             sendQuestion(pin);
+        } else {
+            socket.emit('error', 'Could not start game. Either game not found or you are not the host.');
         }
     });
 
